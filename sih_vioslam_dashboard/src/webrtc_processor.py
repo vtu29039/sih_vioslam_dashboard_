@@ -18,24 +18,33 @@ class VIOProcessor:
         self._mask = None
         self._telemetry = None
         self._latency_ms = 0.0
+        self._frames = 0
+        self._error = None
 
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
-        t0 = time.time()
-        img = frame.to_ndarray(format="bgr24")
-        img = cv2.resize(img, (640, 480))
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        try:
+            t0 = time.time()
+            img = frame.to_ndarray(format="bgr24")
+            img = cv2.resize(img, (640, 480))
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-        annotated, mask, _static, dyn_pixels, cx = self.engine.process_frame(img, gray)
-        telemetry = self.controller.compute_telemetry(dyn_pixels, cx, frame_width=img.shape[1])
-        latency = round((time.time() - t0) * 1000, 1)
+            annotated, mask, _static, dyn_pixels, cx = self.engine.process_frame(img, gray)
+            telemetry = self.controller.compute_telemetry(dyn_pixels, cx, frame_width=img.shape[1])
+            latency = round((time.time() - t0) * 1000, 1)
 
-        with self._lock:
-            self._mask = mask
-            self._telemetry = telemetry
-            self._latency_ms = latency
+            with self._lock:
+                self._mask = mask
+                self._telemetry = telemetry
+                self._latency_ms = latency
+                self._frames += 1
+                self._error = None
 
-        return av.VideoFrame.from_ndarray(annotated, format="bgr24")
+            return av.VideoFrame.from_ndarray(annotated, format="bgr24")
+        except Exception as e:  # never let one bad frame kill the stream
+            with self._lock:
+                self._error = repr(e)
+            return frame
 
     def snapshot(self):
         with self._lock:
-            return self._mask, self._telemetry, self._latency_ms
+            return self._mask, self._telemetry, self._latency_ms, self._frames, self._error
